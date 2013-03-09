@@ -46,7 +46,7 @@ class Subscriber(object):
 
         self.channels.append(channel)
         router.subscribe(channel, self)
-    
+
     def unsubscribe(self, channel):
         if channel not in self.channels:
             raise ProtocolError('Trying to unsubscribe from channel you are not subscribed to')
