@@ -3,13 +3,14 @@
 import json
 
 from twisted.internet import reactor
-from twisted.internet.protocol import DatagramProtocol
+from twisted.internet.protocol import DatagramProtocol, ServerFactory
 from twisted.protocols.basic import LineReceiver
 from autobahn.websocket import WebSocketServerFactory, WebSocketServerProtocol, listenWS
 
 config = {
     'input_port' : 12719,
     'websocket_port' : 13719,
+    'text_port' : 14719,
     'max_channels' : 100,
 }
 
@@ -59,7 +60,9 @@ class Subscriber(object):
     def deliver(self, message):
         self.target.deliver(message)
 
-    def handleJSONCommand(self, command):
+    def handleJSONCommand(self, commandText):
+        command = json.loads(commandText)
+
         if '@' not in command:
             raise ProtocolError('No command specified')
 
@@ -72,7 +75,7 @@ class Subscriber(object):
         if command['@'] == 'list-subscriptions':
             return { "@" : "subscriptions", "channels" : self.channels }
 
-        return None
+        raise ProtocolError('Unknown command: %s' % command['@'])
 
 router = MessageRouter()
 
@@ -97,23 +100,43 @@ class WebSocketRCFeed(WebSocketServerProtocol):
 
     def onMessage(self, data, is_binary):
         try:
-            message = json.loads(data)
-            
-            response = self.subscriber.handleJSONCommand(message)
-            if response:
-                self.message(response)
-            else:
-                raise ProtocolError('Unknown command: %s' % message['@'])
+            self.message( self.subscriber.handleJSONCommand(data) )
         except Exception as err:
             self.message({'@' : 'error'})
 
     def deliver(self, message):
         self.message(message)
 
-factory = WebSocketServerFactory( "ws://localhost:%i" % config['websocket_port'] )
-factory.protocol = WebSocketRCFeed
-listenWS(factory)
+class SimpleTextRCFeed(LineReceiver):
+    def connectionMade(self):
+        LineReceiver.connectionMade(self)
+        self.subscriber = Subscriber(self)
+
+    def onClose(self, wasClean, code, reason):
+        self.subscriber.unsubscribeAll()
+
+    def message(self, data):
+        self.transport.write(json.dumps(data) + "\r\n")
+
+    def lineReceived(self, line):
+        try:
+            print line
+            self.message( self.subscriber.handleJSONCommand(line) )
+        except Exception as err:
+            self.message({'@' : 'error'})
+
+    def deliver(self, message):
+        self.message(message)
+
+ws_factory = WebSocketServerFactory( "ws://localhost:%i" % config['websocket_port'] )
+ws_factory.protocol = WebSocketRCFeed
+listenWS(ws_factory)
+
+st_factory = ServerFactory()
+st_factory.protocol = SimpleTextRCFeed
+reactor.listenTCP(config['text_port'], st_factory)
 
 reactor.listenUDP(config['input_port'], MediaWikiRCInput())
+
 reactor.run()
 
