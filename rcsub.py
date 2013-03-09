@@ -1,18 +1,19 @@
 #!/usr/bin/python
 
-import json
+import json, sys
 
 from twisted.internet import reactor
 from twisted.internet.protocol import DatagramProtocol, ServerFactory
 from twisted.protocols.basic import LineReceiver
 from autobahn.websocket import WebSocketServerFactory, WebSocketServerProtocol, listenWS
 
-config = {
-    'input_port' : 12719,
-    'websocket_port' : 13719,
-    'text_port' : 14719,
-    'max_channels' : 100,
-}
+
+class Configuration(object):
+    def __init__(self, filename):
+        self.filename = filename
+        configFile = open(filename)
+        configData = json.load(configFile)
+        self.__dict__.update(configData)
 
 class MessageRouter(object):
     def __init__(self):
@@ -39,8 +40,8 @@ class Subscriber(object):
         self.channels = []
 
     def subscribe(self, channel):
-        if len(self.channels) >= config['max_channels']:
-            raise ProtocolError('Exceeded maximum subscription limit of %i channels' % config['max_channels'])
+        if len(self.channels) >= config.max_channels:
+            raise ProtocolError('Exceeded maximum subscription limit of %i channels' % config.max_channels)
         if channel in self.channels:
             raise ProtocolError('You are already subscribed to the channel %s' % channel)
 
@@ -138,15 +139,17 @@ class SimpleTextRCFeed(LineReceiver):
     def deliver(self, message):
         self.message(message)
 
-ws_factory = WebSocketServerFactory( "ws://localhost:%i" % config['websocket_port'] )
+config = Configuration(sys.argv[1])
+
+ws_factory = WebSocketServerFactory( "ws://localhost:%i" % config.websocket_port )
 ws_factory.protocol = WebSocketRCFeed
 listenWS(ws_factory)
 
 st_factory = ServerFactory()
 st_factory.protocol = SimpleTextRCFeed
-reactor.listenTCP(config['text_port'], st_factory)
+reactor.listenTCP(config.text_port, st_factory)
 
-reactor.listenUDP(config['input_port'], MediaWikiRCInput())
+reactor.listenUDP(config.input_port, MediaWikiRCInput())
 
 reactor.run()
 
