@@ -41,6 +41,8 @@ class Subscriber(object):
     def subscribe(self, channel):
         if len(self.channels) >= config['max_channels']:
             raise ProtocolError('Exceeded maximum subscription limit of %i channels' % config['max_channels'])
+        if channel in self.channels:
+            raise ProtocolError('You are already subscribed to the channel %s' % channel)
 
         self.channels.append(channel)
         router.subscribe(channel, self)
@@ -66,6 +68,9 @@ class Subscriber(object):
         if '@' not in command:
             raise ProtocolError('No command specified')
 
+        if command['@'] in ('subscribe', 'unsubscribe') and 'channel' not in command:
+            raise ProtocolError('No channel specified')
+
         if command['@'] == 'subscribe':
             self.subscribe(command['channel'])
             return { "@" : "success" }
@@ -81,6 +86,12 @@ router = MessageRouter()
 
 class ProtocolError(Exception):
     pass
+
+def handleError(err):
+    if type(err) in (ProtocolError, ValueError):
+        return str(err)
+    else:
+        return "Internal error"
 
 class MediaWikiRCInput(DatagramProtocol):
     def datagramReceived(self, data, (host, port)):
@@ -102,7 +113,7 @@ class WebSocketRCFeed(WebSocketServerProtocol):
         try:
             self.message( self.subscriber.handleJSONCommand(data) )
         except Exception as err:
-            self.message({'@' : 'error'})
+            self.message({'@' : 'error', 'message' : handleError(err)})
 
     def deliver(self, message):
         self.message(message)
@@ -120,10 +131,9 @@ class SimpleTextRCFeed(LineReceiver):
 
     def lineReceived(self, line):
         try:
-            print line
             self.message( self.subscriber.handleJSONCommand(line) )
         except Exception as err:
-            self.message({'@' : 'error'})
+            self.message({'@' : 'error', 'message' : handleError(err)})
 
     def deliver(self, message):
         self.message(message)
