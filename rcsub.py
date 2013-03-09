@@ -15,7 +15,8 @@ config = {
 }
 
 class MessageRouter(object):
-    subs = {}
+    def __init__(self):
+        self.subs = {}
 
     def subscribe(self, channel, listener):
         if channel not in self.subs:
@@ -33,10 +34,9 @@ class MessageRouter(object):
                 listener.deliver(message)
 
 class Subscriber(object):
-    channels = []
-
     def __init__(self, target):
         self.target = target
+        self.channels = []
 
     def subscribe(self, channel):
         if len(self.channels) >= config['max_channels']:
@@ -123,7 +123,7 @@ class SimpleTextRCFeed(LineReceiver):
         LineReceiver.connectionMade(self)
         self.subscriber = Subscriber(self)
 
-    def onClose(self, wasClean, code, reason):
+    def connectionLost(self, reason):
         self.subscriber.unsubscribeAll()
 
     def message(self, data):
