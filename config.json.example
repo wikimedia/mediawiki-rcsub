@@ -2,5 +2,6 @@
     "input_port" : 12719,
     "websocket_port" : 13719,
     "text_port" : 14719,
-    "max_channels" : 100
+    "max_channels" : 100,
+    "control_path" : "/tmp/rcsub.sock"
 }

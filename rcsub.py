@@ -9,30 +9,57 @@ from autobahn.websocket import WebSocketServerFactory, WebSocketServerProtocol, 
 
 
 class Configuration(object):
+    updatable = { "max_channels" }
+
     def __init__(self, filename):
         self.filename = filename
         configFile = open(filename)
-        configData = json.load(configFile)
-        self.__dict__.update(configData)
+        data = json.load(configFile)
+        self.__dict__.update(data)
+        self.data = data
+
+    def reload(self):
+        configFile = open(self.filename)
+        data = json.load(configFile)
+
+        update = { key : value for key, value in data.items() if getattr(self, key) != value }
+        if not all(key in self.updatable for key in update):
+            raise ProtocolError("Cannot update %s while server is running" % key)
+
+        self.__dict__.update(data)
+        self.data = data
 
 class MessageRouter(object):
     def __init__(self):
         self.subs = {}
+        self.numChannels = 0
+        self.numSubs = 0
+        self.numMessages = 0
+        self.numDeliveries = 0
 
     def subscribe(self, channel, listener):
         if channel not in self.subs:
             self.subs[channel] = []
+            self.numChannels += 1
+
         self.subs[channel].append(listener)
+        self.numSubs += 1
 
     def unsubscribe(self, channel, listener):
         self.subs[channel].remove(listener)
+        self.numSubs -= 1
+
         if not self.subs[channel]:
             del self.subs[channel]
+            self.numChannels -= 1
 
     def deliver(self, channel, message):
+        self.numMessages += 1
+
         if channel in self.subs:
             for listener in self.subs[channel]:
                 listener.deliver(message)
+                self.numDeliveries += 1
 
 class Subscriber(object):
     def __init__(self, target):
@@ -94,6 +121,36 @@ def handleError(err):
     else:
         return "Internal error"
 
+class ControlProtocol(LineReceiver):
+    delimiter = "\n"
+
+    def message(self, msg):
+        self.transport.write( json.dumps(msg) + "\n" )
+
+    def lineReceived(self, data):
+        try:
+            command = json.loads(data)
+
+            if command["@"] == "stats":
+                stats = { "@" : "stats" }
+                stats["channels"] = router.numChannels
+                stats["subs"] = router.numSubs
+                stats["messages"] = router.numMessages
+                stats["deliveries"] = router.numDeliveries
+                self.message(stats)
+            elif command["@"] == "stop":
+                reactor.stop()
+            elif command["@"] == "get-config":
+                self.message(config.data)
+            elif command["@"] == "reload-config":
+                config.reload()
+                self.message({ "@" : "success" })
+            else:
+                raise ProtocolError("Unknown command")
+
+        except Exception as err:
+            self.message({ "@" : "error", "message" : str(err) })
+
 class MediaWikiRCInput(DatagramProtocol):
     def datagramReceived(self, data, (host, port)):
         change = json.loads(data)
@@ -140,6 +197,10 @@ class SimpleTextRCFeed(LineReceiver):
         self.message(message)
 
 config = Configuration(sys.argv[1])
+
+control_factory = ServerFactory()
+control_factory.protocol = ControlProtocol
+reactor.listenUNIX(config.control_path, control_factory)
 
 ws_factory = WebSocketServerFactory( "ws://localhost:%i" % config.websocket_port )
 ws_factory.protocol = WebSocketRCFeed
