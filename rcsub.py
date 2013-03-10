@@ -1,15 +1,14 @@
 #!/usr/bin/python
 
-import json, sys
+import json, sys, logging
 
 from twisted.internet import reactor
 from twisted.internet.protocol import DatagramProtocol, ServerFactory
 from twisted.protocols.basic import LineReceiver
 from autobahn.websocket import WebSocketServerFactory, WebSocketServerProtocol, listenWS
 
-
 class Configuration(object):
-    updatable = { "max_channels" }
+    updatable = { "max_channels", "log_level" }
 
     def __init__(self, filename):
         self.filename = filename
@@ -22,12 +21,13 @@ class Configuration(object):
         configFile = open(self.filename)
         data = json.load(configFile)
 
-        update = { key : value for key, value in data.items() if getattr(self, key) != value }
+        update = [ key for key, value in data.items() if getattr(self, key) != value ]
         if not all(key in self.updatable for key in update):
             raise ProtocolError("Cannot update %s while server is running" % key)
 
         self.__dict__.update(data)
         self.data = data
+        logging.info("Configuration reloaded successfully, updated %s" % ', '.join(update))
 
 class MessageRouter(object):
     def __init__(self):
@@ -131,6 +131,8 @@ class ControlProtocol(LineReceiver):
         try:
             command = json.loads(data)
 
+            logging.info("Control command '%s' received" % command["@"])
+
             if command["@"] == "stats":
                 stats = { "@" : "stats" }
                 stats["channels"] = router.numChannels
@@ -149,6 +151,7 @@ class ControlProtocol(LineReceiver):
                 raise ProtocolError("Unknown command")
 
         except Exception as err:
+            logging.warning("Malformed control command received: %s" % str(err) )
             self.message({ "@" : "error", "message" : str(err) })
 
 class MediaWikiRCInput(DatagramProtocol):
@@ -196,21 +199,37 @@ class SimpleTextRCFeed(LineReceiver):
     def deliver(self, message):
         self.message(message)
 
+# Load configuration
 config = Configuration(sys.argv[1])
 
-control_factory = ServerFactory()
-control_factory.protocol = ControlProtocol
-reactor.listenUNIX(config.control_path, control_factory)
+# Set up logging
+logging.basicConfig(
+    filename = config.log_path,
+    level = config.log_level,
+    format = '[%(asctime)s | %(process)d] %(levelname)s %(message)s'
+)
 
-ws_factory = WebSocketServerFactory( "ws://localhost:%i" % config.websocket_port )
-ws_factory.protocol = WebSocketRCFeed
-listenWS(ws_factory)
+try:
+    # Set up the control socket
+    control_factory = ServerFactory()
+    control_factory.protocol = ControlProtocol
+    reactor.listenUNIX(config.control_path, control_factory)
 
-st_factory = ServerFactory()
-st_factory.protocol = SimpleTextRCFeed
-reactor.listenTCP(config.text_port, st_factory)
+    # Set up the WebSocket interface
+    ws_factory = WebSocketServerFactory( "ws://localhost:%i" % config.websocket_port )
+    ws_factory.protocol = WebSocketRCFeed
+    listenWS(ws_factory)
 
-reactor.listenUDP(config.input_port, MediaWikiRCInput())
+    # Set up the plaintext interface
+    st_factory = ServerFactory()
+    st_factory.protocol = SimpleTextRCFeed
+    reactor.listenTCP(config.text_port, st_factory)
 
-reactor.run()
+    # Set up the input
+    reactor.listenUDP(config.input_port, MediaWikiRCInput())
 
+    logging.info("Server is set up, launching the reactor")
+    reactor.run()
+except Exception:
+    logging.exception("Exception caught during the start of the server")
+    logging.critical("Unable to start, aborting")

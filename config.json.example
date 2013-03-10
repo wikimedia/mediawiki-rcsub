@@ -3,5 +3,7 @@
     "websocket_port" : 13719,
     "text_port" : 14719,
     "max_channels" : 100,
-    "control_path" : "/tmp/rcsub.sock"
+    "control_path" : "/tmp/rcsub.sock",
+    "log_path" : "/tmp/rcsub.log",
+    "log_level" : "INFO"
 }
